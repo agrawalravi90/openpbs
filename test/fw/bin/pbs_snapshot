@@ -50,6 +50,7 @@ import tarfile
 
 from getopt import GetoptError
 from threading import Thread
+from pathlib import Path
 
 from ptl.lib.pbs_testlib import PtlConfig
 from ptl.utils.pbs_snaputils import PBSSnapUtils, ObfuscateSnapshot
@@ -100,6 +101,7 @@ Usage: pbs_snapshot -o <path to existing output directory> [OPTION]
     --obfuscate                       obfuscates sensitive data
     --with-sudo                       Uses sudo to capture privileged data
     --version                         print version number and exit
+    --obf-snap                        path to existing snapshot directory to obfuscate
 """
 
     print(msg)
@@ -174,6 +176,17 @@ def remotesnap_thread(logger, host):
     du.rm(hostname=host, path=snap_home, recursive=True, force=True)
 
 
+def obfuscate_snapshot_wrapper(snap_name, map_file=None, sudo_val=False):
+    if map_file is None:
+        snappath = Path(snap_name)
+        if snappath is None:
+            sys.stderr.write("snapshot path not found")
+            usage()
+            sys.exit(1)
+        map_file = os.path.join(snappath.parent, "obfuscate.map")
+    obj = ObfuscateSnapshot()
+    obj.obfuscate_snapshot(snap_name, map_file, sudo_val)
+
 def capture_local_snap(sudo_val):
     """
     Helper method to capture snapshot of the local host
@@ -195,8 +208,7 @@ def capture_local_snap(sudo_val):
         snap_name = snap_utils.capture_all()
 
     if obfuscate:
-        obj = ObfuscateSnapshot()
-        obj.obfuscate_snapshot(snap_name, map_file, sudo_val)
+        obfuscate_snapshot_wrapper(snap_name, map_file, sudo_val)
         if additional_hosts is None:
             # Now create the tar
             outtar = snap_name + ".tgz"
@@ -232,7 +244,7 @@ if __name__ == '__main__':
         sopt = "d:H:l:o:h"
         lopt = ["basic", "accounting-logs=", "daemon-logs=", "help",
                 "additional-hosts=", "map=", "obfuscate", "with-sudo",
-                "version"]
+                "version", "obf-snap="]
         opts, args = getopt.getopt(sys.argv[1:], sopt, lopt)
     except GetoptError:
         usage()
@@ -273,29 +285,29 @@ if __name__ == '__main__':
         elif o == "--version":
             print(ptl.__version__)
             sys.exit(0)
+        elif o == "--obf-snap":
+            obf_snap = val
         else:
             sys.stderr.write("Unrecognized option")
             usage()
             sys.exit(1)
 
-    # -o is a mandatory option, so make sure that it was provided
+    if obf_snap:
+        obfuscate = True
+        path = Path(obf_snap)
+        if path:
+            out_dir = str(path.parent)
+
+    # Check that parent of snapshot directory exists
     if out_dir is None:
         sys.stderr.write("-o option not provided")
         usage()
         sys.exit(1)
     elif not os.path.isdir(out_dir):
         sys.stderr.write("-o path should exist,"
-                         " this is where the snapshot is captured")
+                        " this is where the snapshot is captured")
         usage()
         sys.exit(1)
-
-    if not basic:
-        # Capture 5 days of daemon logs and 30 days of accounting logs
-        # by default
-        if daemon_logs is None:
-            daemon_logs = 5
-        if acct_logs is None:
-            acct_logs = 30
 
     fmt = '%(asctime)-15s %(levelname)-8s %(message)s'
     level_int = CliUtils.get_logging_level(log_level)
@@ -315,6 +327,20 @@ if __name__ == '__main__':
         out_abspath = os.path.abspath(out_dir)
         if map_file is None:
             map_file = os.path.join(out_abspath, "obfuscate.map")
+
+    # Obfuscate an existing snapshot
+    if obf_snap:
+        obfuscate_snapshot_wrapper(obf_snap, map_file)
+        print("Snapshot %s obfuscated" % obf_snap)
+        sys.exit(0)
+
+    if not basic:
+        # Capture 5 days of daemon logs and 30 days of accounting logs
+        # by default
+        if daemon_logs is None:
+            daemon_logs = 5
+        if acct_logs is None:
+            acct_logs = 30
 
     if additional_hosts is not None:
         # Capture snapshot of remote hosts in addition to the main host
